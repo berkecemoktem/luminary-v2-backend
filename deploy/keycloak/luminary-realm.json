@@ -1,0 +1,148 @@
+{
+  "realm": "luminary",
+  "enabled": true,
+  "displayName": "Luminary",
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "registrationAllowed": false,
+  "sslRequired": "external",
+  "accessTokenLifespan": 1800,
+  "clients": [
+    {
+      "clientId": "luminary-bff",
+      "enabled": true,
+      "name": "Luminary BFF",
+      "publicClient": false,
+      "secret": "luminary-bff-secret",
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8080/login/oauth2/code/luminary"
+      ],
+      "webOrigins": [
+        "http://localhost:8080",
+        "http://localhost:4200"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:4200/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": {
+            "user.attribute": "email",
+            "claim.name": "email",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "email_verified",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": {
+            "user.attribute": "emailVerified",
+            "claim.name": "email_verified",
+            "jsonType.label": "boolean",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "given_name",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": {
+            "user.attribute": "firstName",
+            "claim.name": "given_name",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "family_name",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": {
+            "user.attribute": "lastName",
+            "claim.name": "family_name",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "preferred_username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "config": {
+            "user.attribute": "username",
+            "claim.name": "preferred_username",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin@luminary.dev",
+      "enabled": true,
+      "email": "admin@luminary.dev",
+      "emailVerified": true,
+      "firstName": "Luminary",
+      "lastName": "Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Luminary123!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "student@luminary.dev",
+      "enabled": true,
+      "email": "student@luminary.dev",
+      "emailVerified": true,
+      "firstName": "Luminary",
+      "lastName": "Student",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Luminary123!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "student2@luminary.dev",
+      "enabled": true,
+      "email": "student2@luminary.dev",
+      "emailVerified": true,
+      "firstName": "Luminary",
+      "lastName": "Student 2",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Luminary123!",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+spring:
+  application:
+    name: luminary
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/luminary}
+    username: ${SPRING_DATASOURCE_USERNAME:luminary}
+    password: ${SPRING_DATASOURCE_PASSWORD:luminary}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    locations: classpath:db/migration
+  session:
+    # Spring Session JDBC: session rows live in the same database.
+    store-type: jdbc
+    jdbc:
+      # The DDL is owned by Flyway (V3__spring_session.sql).
+      initialize-schema: never
+  security:
+    oauth2:
+      client:
+        registration:
+          luminary:
+            provider: luminary
+            client-id: ${OIDC_CLIENT_ID:luminary-bff}
+            client-secret: ${OIDC_CLIENT_SECRET:luminary-bff-secret}
+            # Authorization code + PKCE flows; no tokens are exposed to the browser.
+            authorization-grant-type: authorization_code
+            scope: openid, profile, email
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+        provider:
+          luminary:
+            # Keycloak used for local development (docker-compose).
+            issuer-uri: ${OIDC_ISSUER_URI:http://localhost:8081/realms/luminary}
+
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        # BFF session cookie. Keep secure=true on any non-HTTPS-less deployment.
+        secure: false
+      timeout: 12h
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+app:
+  security:
+    # Origins the SPA is allowed to call with credentials.
+    allowed-origins: ${APP_SECURITY_ALLOWED_ORIGINS:http://localhost:4200}
+    post-login-redirect: ${APP_SECURITY_POST_LOGIN_REDIRECT:http://localhost:4200/}
+  access:
+    invitation-ttl: 7d
+    invitation-accept-url-template: ${INVITATION_ACCEPT_URL_TEMPLATE:http://localhost:4200/invitations/accept?token={token}}
+    dev-first-admin:
+      # Controlled first-admin provisioning; institutions-only model ships it
+      # disabled by default. Local dev opt-in via DEV_FIRST_ADMIN_ENABLED=true.
+      enabled: ${DEV_FIRST_ADMIN_ENABLED:false}
+      email-allowlist: ${DEV_FIRST_ADMIN_ALLOWLIST:admin@luminary.dev}
+      institution-name: ${DEV_FIRST_ADMIN_INSTITUTION_NAME:Luminary Demo}
+      time-zone: UTC
+
+logging:
+  level:
+    root: INFO
+    org.springframework.security: WARN

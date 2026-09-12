@@ -1,0 +1,45 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:luminarytest;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+  flyway:
+    enabled: false
+  session:
+    store-type: none
+  security:
+    oauth2:
+      client:
+        registration:
+          luminary:
+            provider: luminary
+            client-id: luminary-bff
+            client-secret: test-secret
+            authorization-grant-type: authorization_code
+            scope: openid, profile, email
+            redirect-uri: "{baseUrl}/login/oauth2/code/luminary"
+        provider:
+          luminary:
+            # Explicit URIs, no issuer discovery: the test context must not
+            # reach a live identity provider during startup.
+            authorization-uri: http://localhost:8081/realms/luminary/protocol/openid-connect/auth
+            token-uri: http://localhost:8081/realms/luminary/protocol/openid-connect/token
+            jwk-set-uri: http://localhost:8081/realms/luminary/protocol/openid-connect/certs
+            user-info-uri: http://localhost:8081/realms/luminary/protocol/openid-connect/userinfo
+            user-name-attribute: sub
+
+server:
+  servlet:
+    session:
+      timeout: 1h
+
+app:
+  security:
+    allowed-origins: http://localhost:4200
+    post-login-redirect: http://localhost:4200/
+  access:
+    dev-first-admin:
+      enabled: false
