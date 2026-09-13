@@ -2,6 +2,7 @@ package com.luminary.access.api;
 
 import com.luminary.access.api.dto.AcceptInvitationRequest;
 import com.luminary.access.api.dto.CreateInvitationRequest;
+import com.luminary.access.api.dto.ResendInvitationRequest;
 import com.luminary.access.application.InvitationCreated;
 import com.luminary.access.application.InvitationService;
 import com.luminary.access.application.InvitedWorkspace;
@@ -11,8 +12,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Invitation endpoints. Tenant resolution on creation uses the active
- * workspace from the server session.
+ * Invitation endpoints. Tenant resolution on creation and resend uses the
+ * active workspace from the server session. The creation response never
+ * contains the raw token; it is delivered to the invited student by email.
  */
 @RestController
 @RequestMapping("/api/v1/invitations")
@@ -33,6 +35,15 @@ public class InvitationController {
                 currentUser.require().value(),
                 currentUser.requireTenant(),
                 body.email(), body.role());
+    }
+
+    @PostMapping("/resend")
+    public InvitationCreated resend(
+            @RequestBody ResendInvitationRequest body) {
+        return invitationService.resend(
+                currentUser.require().value(),
+                currentUser.requireTenant(),
+                body.email());
     }
 
     @PostMapping("/accept")
