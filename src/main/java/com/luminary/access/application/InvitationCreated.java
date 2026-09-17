@@ -7,11 +7,11 @@ import com.luminary.shared.identity.TenantId;
 import java.time.OffsetDateTime;
 
 /**
- * Result of creating an invitation. The raw single-use token is returned
- * exactly once; only its SHA-256 hash is persisted.
+ * Result of creating an invitation. The raw single-use token is never
+ * exposed here; it travels only inside the invitation email. Only its
+ * SHA-256 hash is persisted.
  */
 public record InvitationCreated(InvitationId invitationId, TenantId tenantId,
                                 String email, MembershipRole role,
-                                String token, OffsetDateTime expiresAt,
-                                String acceptUrl) {
+                                OffsetDateTime expiresAt) {
 }

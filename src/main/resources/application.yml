@@ -76,6 +76,13 @@ app:
       email-allowlist: ${DEV_FIRST_ADMIN_ALLOWLIST:admin@luminary.dev}
       institution-name: ${DEV_FIRST_ADMIN_INSTITUTION_NAME:Luminary Demo}
       time-zone: UTC
+  platform:
+    mail:
+      # Sender shown on outbound email. SMTP transport itself is configured
+      # through spring.mail.* (host/port/username/password); when no host is
+      # configured the platform falls back to a logging-only sender so local
+      # development runs without a mail server.
+      from: ${LUMINARY_MAIL_FROM:Luminary <noreply@luminary.dev>}
 
 logging:
   level:

@@ -15,8 +15,12 @@ import com.luminary.shared.error.ApiException;
 import com.luminary.shared.identity.InvitationId;
 import com.luminary.shared.identity.TenantId;
 import com.luminary.shared.identity.UserId;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -30,11 +34,19 @@ import java.util.UUID;
 
 /**
  * Single-use, time-limited invitations (E03-08). Only the admin of a tenant
- * may invite; accepting binds the account whose verified OIDC email matches
- * the invited email.
+ * may invite or resend; accepting binds the account whose verified OIDC email
+ * matches the invited email and creates the {@link MembershipEntity}.
+ *
+ * The bearer token is a presigned-URL-style secret: it is generated with high
+ * entropy, never persisted (only its SHA-256 hash is stored), is valid for a
+ * limited time and can be used once. It travels to the invited student only
+ * inside the invitation email and is never returned to the inviting admin.
  */
 @Service
 public class InvitationService {
+
+    private static final Logger log =
+            LoggerFactory.getLogger(InvitationService.class);
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
@@ -43,18 +55,21 @@ public class InvitationService {
     private final UserRepository userRepository;
     private final CurrentSession currentSession;
     private final AccessAppProperties properties;
+    private final InvitationMailer invitationMailer;
 
     public InvitationService(
             InvitationRepository invitationRepository,
             MembershipRepository membershipRepository,
             UserRepository userRepository,
             CurrentSession currentSession,
-            AccessAppProperties properties) {
+            AccessAppProperties properties,
+            InvitationMailer invitationMailer) {
         this.invitationRepository = invitationRepository;
         this.membershipRepository = membershipRepository;
         this.userRepository = userRepository;
         this.currentSession = currentSession;
         this.properties = properties;
+        this.invitationMailer = invitationMailer;
     }
 
     @Transactional
@@ -63,15 +78,8 @@ public class InvitationService {
                                     MembershipRole role) {
         MembershipEntity actor = requireActiveMembership(actorUserId,
                 tenantId);
-        if (actor.getRole() != MembershipRole.INSTITUTION_ADMIN) {
-            throw ApiException.forbidden("role-required-institution-admin",
-                    "Only an institution admin can invite users.");
-        }
+        requireInstitutionAdmin(actor);
         TenantEntity tenant = actor.getTenant();
-        if (tenant.getType() != TenantType.INSTITUTION) {
-            throw ApiException.conflict("invitation-not-supported",
-                    "Invitations are only available for institutions.");
-        }
 
         String email = normalizeEmail(invitedEmail);
         if (email == null || email.isBlank()) {
@@ -85,24 +93,47 @@ public class InvitationService {
                 .findByTenantIdAndEmailAndUsedAtIsNull(tenant.getId(), email)
                 .ifPresent(existing -> {
                     throw ApiException.conflict("invitation-already-pending",
-                            "An active invitation already exists for this email.");
+                            "An active invitation already exists for this "
+                                    + "email.");
                 });
 
-        String token = randomToken();
+        return createInvitationAndEmail(actor, email, targetRole);
+    }
+
+    /**
+     * Re-sends an invitation. Because only the hash of the previous token is
+     * stored (the raw secret was delivered by email and is not retrievable),
+     * a resend always retires the previous link and issues a fresh token.
+     */
+    @Transactional
+    public InvitationCreated resend(UUID actorUserId, TenantId tenantId,
+                                    String invitedEmail) {
+        MembershipEntity actor = requireActiveMembership(actorUserId,
+                tenantId);
+        requireInstitutionAdmin(actor);
+
+        String email = normalizeEmail(invitedEmail);
+        if (email == null || email.isBlank()) {
+            throw ApiException.badRequest("email-required",
+                    "A valid email is required.");
+        }
+
+        InvitationEntity existing = invitationRepository
+                .findFirstByTenantIdAndEmailOrderByCreatedAtDesc(
+                        tenantId.value(), email)
+                .orElseThrow(() -> ApiException.notFound(
+                        "invitation-not-found",
+                        "No invitation exists for this email."));
+        if (existing.isUsed()) {
+            throw ApiException.conflict("invitation-already-used",
+                    "This invitation has already been accepted.");
+        }
         OffsetDateTime now = OffsetDateTime.now();
-        OffsetDateTime expiresAt = now.plus(properties.getInvitationTtl());
+        existing.markUsed(now);
+        invitationRepository.save(existing);
 
-        InvitationEntity invitation = InvitationEntity.create(
-                tenant, email, targetRole, sha256(token), expiresAt,
-                actorUserId);
-        invitationRepository.save(invitation);
-
-        String acceptUrl = properties.getInvitationAcceptUrlTemplate()
-                .replace("{token}", token);
-
-        return new InvitationCreated(
-                new InvitationId(invitation.getId()), tenantId, email,
-                targetRole, token, expiresAt, acceptUrl);
+        return createInvitationAndEmail(actor, email,
+                existing.getRole());
     }
 
     @Transactional
@@ -167,6 +198,64 @@ public class InvitationService {
                 membership.getJoinedAt());
     }
 
+    private InvitationCreated createInvitationAndEmail(
+            MembershipEntity actor, String email, MembershipRole role) {
+        TenantEntity tenant = actor.getTenant();
+        String token = randomToken();
+        OffsetDateTime now = OffsetDateTime.now();
+        OffsetDateTime expiresAt = now.plus(properties.getInvitationTtl());
+
+        InvitationEntity invitation = invitationRepository.save(
+                InvitationEntity.create(tenant, email, role,
+                        sha256(token), expiresAt, actor.getUser().getId()));
+
+        String acceptUrl = properties.getInvitationAcceptUrlTemplate()
+                .replace("{token}", token);
+
+        sendInvitationEmailAfterCommit(tenant, email, acceptUrl, expiresAt);
+
+        return new InvitationCreated(
+                new InvitationId(invitation.getId()), new TenantId(tenant.getId()),
+                email, role, expiresAt);
+    }
+
+    /**
+     * Delivers the invitation email only after the transaction that created
+     * the invitation has committed, so a rolled-back invitation never leaks a
+     * token. Called after commit inside Spring's transaction; when there is no
+     * active transaction (for example direct unit-test calls) it is sent
+     * immediately. A delivery failure is logged, never propagated: mail is a
+     * side channel and must not undo the invitation record.
+     */
+    private void sendInvitationEmailAfterCommit(
+            TenantEntity tenant, String email, String acceptUrl,
+            OffsetDateTime expiresAt) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            deliverInvitationMail(tenant, email, acceptUrl,
+                                    expiresAt);
+                        }
+                    });
+        } else {
+            deliverInvitationMail(tenant, email, acceptUrl, expiresAt);
+        }
+    }
+
+    private void deliverInvitationMail(TenantEntity tenant, String email,
+                                       String acceptUrl,
+                                       OffsetDateTime expiresAt) {
+        try {
+            invitationMailer.sendInvitation(tenant, email, acceptUrl,
+                    expiresAt);
+        } catch (RuntimeException e) {
+            log.error("Invitation email delivery failed for tenant={} to={}",
+                    tenant.getId(), email, e);
+        }
+    }
+
     private MembershipEntity requireActiveMembership(UUID userId,
                                                      TenantId tenantId) {
         MembershipEntity membership = membershipRepository
@@ -179,6 +268,17 @@ public class InvitationService {
                     "Your membership in this workspace has been revoked.");
         }
         return membership;
+    }
+
+    private static void requireInstitutionAdmin(MembershipEntity actor) {
+        if (actor.getRole() != MembershipRole.INSTITUTION_ADMIN) {
+            throw ApiException.forbidden("role-required-institution-admin",
+                    "Only an institution admin can invite users.");
+        }
+        if (actor.getTenant().getType() != TenantType.INSTITUTION) {
+            throw ApiException.conflict("invitation-not-supported",
+                    "Invitations are only available for institutions.");
+        }
     }
 
     private static String randomToken() {

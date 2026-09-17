@@ -16,6 +16,9 @@ import com.luminary.shared.error.ApiException;
 import com.luminary.shared.identity.TenantId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -28,8 +31,10 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -40,6 +45,7 @@ class InvitationServiceTest {
     private UserRepository userRepository;
     private CurrentSession currentSession;
     private AccessAppProperties properties;
+    private InvitationMailer invitationMailer;
     private InvitationService service;
 
     private UserEntity admin;
@@ -53,10 +59,11 @@ class InvitationServiceTest {
         membershipRepository = mock(MembershipRepository.class);
         userRepository = mock(UserRepository.class);
         currentSession = mock(CurrentSession.class);
+        invitationMailer = mock(InvitationMailer.class);
         properties = new AccessAppProperties();
         service = new InvitationService(invitationRepository,
                 membershipRepository, userRepository, currentSession,
-                properties);
+                properties, invitationMailer);
 
         admin = UserEntity.create(
                 new AuthIdentity("iss", "sub-admin"),
@@ -70,7 +77,7 @@ class InvitationServiceTest {
     }
 
     @Test
-    void create_returnsSingleUseTokenAndStoresHash() {
+    void create_persistsTokenHash_andDeliversTokenOnlyByEmail() {
         when(membershipRepository.findByTenantIdAndUserId(
                 institution.getId(), admin.getId()))
                 .thenReturn(Optional.of(adminMembership));
@@ -80,8 +87,6 @@ class InvitationServiceTest {
                 .thenReturn(Optional.empty());
         when(invitationRepository.save(any(InvitationEntity.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
-        when(membershipRepository.save(any(MembershipEntity.class)))
-                .thenAnswer(inv -> inv.getArgument(0));
 
         InvitationCreated result = service.create(admin.getId(),
                 new TenantId(institution.getId()),
@@ -89,13 +94,82 @@ class InvitationServiceTest {
 
         assertThat(result.email()).isEqualTo("newuser@luminary.dev");
         assertThat(result.role()).isEqualTo(MembershipRole.STUDENT);
-        assertThat(result.token()).isNotEmpty();
         assertThat(result.expiresAt())
                 .isAfter(OffsetDateTime.now().plusDays(6).plusHours(23));
 
+        String emailedToken = captureEmailedToken(institution);
+        assertThat(emailedToken).isNotEmpty();
         verify(invitationRepository).save(argThat(inv -> inv.getTokenHash()
-                .equals(sha256(result.token()))));
-        assertThat(result.acceptUrl()).contains(result.token());
+                .equals(sha256(emailedToken))));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"student@luminary.dev", "STUDENT@luminary.dev"})
+    void resend_retiresPreviousLink_andEmailsFreshToken(String storedEmail) {
+        InvitationEntity previous = InvitationEntity.create(institution,
+                storedEmail, MembershipRole.STUDENT, sha256("old-token"),
+                OffsetDateTime.now().plusDays(5), admin.getId());
+        when(membershipRepository.findByTenantIdAndUserId(
+                institution.getId(), admin.getId()))
+                .thenReturn(Optional.of(adminMembership));
+        when(invitationRepository
+                .findFirstByTenantIdAndEmailOrderByCreatedAtDesc(
+                        institution.getId(), "student@luminary.dev"))
+                .thenReturn(Optional.of(previous));
+        when(invitationRepository.save(any(InvitationEntity.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        InvitationCreated result = service.resend(admin.getId(),
+                new TenantId(institution.getId()),
+                " STUDENT@Luminary.Dev ");
+
+        assertThat(result.email()).isEqualTo("student@luminary.dev");
+        verify(invitationRepository)
+                .save(argThat(InvitationEntity::isUsed));
+        assertThat(captureEmailedToken(institution))
+                .isNotEqualTo("old-token");
+    }
+
+    @Test
+    void resend_unknownEmail_isNotFound() {
+        when(membershipRepository.findByTenantIdAndUserId(
+                institution.getId(), admin.getId()))
+                .thenReturn(Optional.of(adminMembership));
+        when(invitationRepository
+                .findFirstByTenantIdAndEmailOrderByCreatedAtDesc(
+                        institution.getId(), "ghost@luminary.dev"))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.resend(admin.getId(),
+                new TenantId(institution.getId()), "ghost@luminary.dev"))
+                .isInstanceOf(ApiException.class)
+                .satisfies(e -> assertThat(((ApiException) e).getCode())
+                        .isEqualTo("invitation-not-found"));
+    }
+
+    @Test
+    void resend_acceptedInvitation_isRejected() {
+        InvitationEntity accepted = InvitationEntity.create(institution,
+                "student@luminary.dev", MembershipRole.STUDENT,
+                sha256("used-token"), OffsetDateTime.now().plusDays(5),
+                admin.getId());
+        accepted.markUsed(OffsetDateTime.now());
+        when(membershipRepository.findByTenantIdAndUserId(
+                institution.getId(), admin.getId()))
+                .thenReturn(Optional.of(adminMembership));
+        when(invitationRepository
+                .findFirstByTenantIdAndEmailOrderByCreatedAtDesc(
+                        institution.getId(), "student@luminary.dev"))
+                .thenReturn(Optional.of(accepted));
+
+        assertThatThrownBy(() -> service.resend(admin.getId(),
+                new TenantId(institution.getId()), "student@luminary.dev"))
+                .isInstanceOf(ApiException.class)
+                .satisfies(e -> assertThat(((ApiException) e).getCode())
+                        .isEqualTo("invitation-already-used"));
+
+        verify(invitationMailer, never()).sendInvitation(any(), anyString(),
+                anyString(), any());
     }
 
     @Test
@@ -113,6 +187,24 @@ class InvitationServiceTest {
                 .satisfies(e -> assertThat(
                         ((ApiException) e).getCode())
                         .isEqualTo("role-required-institution-admin"));
+    }
+
+    @Test
+    void create_rejectsPersonalTenant() {
+        TenantEntity personal = TenantEntity.personal("Solo");
+        MembershipEntity owner = MembershipEntity.create(personal, admin,
+                MembershipRole.INSTITUTION_ADMIN);
+        when(membershipRepository.findByTenantIdAndUserId(
+                personal.getId(), admin.getId()))
+                .thenReturn(Optional.of(owner));
+
+        assertThatThrownBy(() -> service.create(admin.getId(),
+                new TenantId(personal.getId()),
+                "x@luminary.dev", MembershipRole.STUDENT))
+                .isInstanceOf(ApiException.class)
+                .satisfies(e -> assertThat(
+                        ((ApiException) e).getCode())
+                        .isEqualTo("invitation-not-supported"));
     }
 
     @Test
@@ -135,8 +227,10 @@ class InvitationServiceTest {
 
         assertThat(result.tenantId()).isEqualTo(
                 new TenantId(institution.getId()));
+        assertThat(result.tenantType()).isEqualTo(TenantType.INSTITUTION);
         assertThat(result.role()).isEqualTo(MembershipRole.STUDENT);
         assertThat(result.joinedAt()).isNotNull();
+        assertThat(invitation.isUsed()).isTrue();
     }
 
     @Test
@@ -230,6 +324,15 @@ class InvitationServiceTest {
                 .satisfies(e -> assertThat(
                         ((ApiException) e).getCode())
                         .isEqualTo("already-member"));
+    }
+
+    private String captureEmailedToken(TenantEntity tenant) {
+        ArgumentCaptor<String> url = ArgumentCaptor.forClass(String.class);
+        verify(invitationMailer).sendInvitation(
+                argThat(t -> t.getId().equals(tenant.getId())),
+                anyString(), url.capture(), any());
+        return url.getValue()
+                .substring(url.getValue().indexOf("token=") + "token=".length());
     }
 
     private InvitationEntity pendingInvitation() {
