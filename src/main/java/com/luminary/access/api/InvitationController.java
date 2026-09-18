@@ -6,10 +6,14 @@ import com.luminary.access.api.dto.ResendInvitationRequest;
 import com.luminary.access.application.InvitationCreated;
 import com.luminary.access.application.InvitationService;
 import com.luminary.access.application.InvitedWorkspace;
+import com.luminary.access.application.PendingInvitation;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * Invitation endpoints. Tenant resolution on creation and resend uses the
@@ -50,5 +54,10 @@ public class InvitationController {
     public InvitedWorkspace accept(@RequestBody AcceptInvitationRequest body) {
         return invitationService.accept(currentUser.require().value(),
                 body.token());
+    }
+
+    @GetMapping("/pending")
+    public List<PendingInvitation> pending() {
+        return invitationService.pendingFor(currentUser.require().value());
     }
 }

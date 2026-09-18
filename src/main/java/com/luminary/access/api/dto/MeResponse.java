@@ -11,6 +11,7 @@ import java.util.List;
 public record MeResponse(MeUser user, TenantId activeWorkspace,
                          List<WorkspaceView> workspaces) {
 
-    public record MeUser(String email, String displayName) {
+    public record MeUser(String email, String displayName,
+                         String country, String city) {
     }
 }

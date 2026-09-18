@@ -108,7 +108,8 @@ class InvitationServiceTest {
     void resend_retiresPreviousLink_andEmailsFreshToken(String storedEmail) {
         InvitationEntity previous = InvitationEntity.create(institution,
                 storedEmail, MembershipRole.STUDENT, sha256("old-token"),
-                OffsetDateTime.now().plusDays(5), admin.getId());
+                OffsetDateTime.now().plusDays(5),
+                acceptUrlFor("old-token"), admin.getId());
         when(membershipRepository.findByTenantIdAndUserId(
                 institution.getId(), admin.getId()))
                 .thenReturn(Optional.of(adminMembership));
@@ -152,7 +153,7 @@ class InvitationServiceTest {
         InvitationEntity accepted = InvitationEntity.create(institution,
                 "student@luminary.dev", MembershipRole.STUDENT,
                 sha256("used-token"), OffsetDateTime.now().plusDays(5),
-                admin.getId());
+                acceptUrlFor("used-token"), admin.getId());
         accepted.markUsed(OffsetDateTime.now());
         when(membershipRepository.findByTenantIdAndUserId(
                 institution.getId(), admin.getId()))
@@ -253,7 +254,7 @@ class InvitationServiceTest {
         InvitationEntity invitation = InvitationEntity.create(institution,
                 "student@luminary.dev", MembershipRole.STUDENT,
                 sha256("s"), OffsetDateTime.now().minusMinutes(1),
-                admin.getId());
+                acceptUrlFor("s"), admin.getId());
         when(invitationRepository.findByTokenHash(sha256("s")))
                 .thenReturn(Optional.of(invitation));
 
@@ -326,6 +327,80 @@ class InvitationServiceTest {
                         .isEqualTo("already-member"));
     }
 
+    @Test
+    void create_persistsSameAcceptUrlThatWasEmailed() {
+        when(membershipRepository.findByTenantIdAndUserId(
+                institution.getId(), admin.getId()))
+                .thenReturn(Optional.of(adminMembership));
+        when(invitationRepository
+                .findByTenantIdAndEmailAndUsedAtIsNull(
+                        institution.getId(), "newuser@luminary.dev"))
+                .thenReturn(Optional.empty());
+        ArgumentCaptor<InvitationEntity> saved =
+                ArgumentCaptor.forClass(InvitationEntity.class);
+        when(invitationRepository.save(any(InvitationEntity.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        service.create(admin.getId(), new TenantId(institution.getId()),
+                "newuser@luminary.dev", MembershipRole.STUDENT);
+
+        verify(invitationRepository).save(saved.capture());
+        String emailedToken = captureEmailedToken(institution);
+        assertThat(saved.getValue().getAcceptUrl())
+                .isEqualTo(acceptUrlFor(emailedToken));
+    }
+
+    @Test
+    void pendingFor_returnsOnlyUnexpiredInvitationsWithAcceptUrl() {
+        InvitationEntity pending = pendingInvitation();
+        InvitationEntity expired = InvitationEntity.create(institution,
+                "student@luminary.dev", MembershipRole.STUDENT,
+                sha256("expired"), OffsetDateTime.now().minusMinutes(1),
+                acceptUrlFor("expired"), admin.getId());
+        InvitationEntity withoutLink = InvitationEntity.create(institution,
+                "student@luminary.dev", MembershipRole.STUDENT,
+                sha256("no-link"), OffsetDateTime.now().plusDays(2), null,
+                admin.getId());
+        when(userRepository.findById(student.getId()))
+                .thenReturn(Optional.of(student));
+        when(invitationRepository.findByEmailAndUsedAtIsNull(
+                "student@luminary.dev"))
+                .thenReturn(List.of(pending, expired, withoutLink));
+
+        List<PendingInvitation> result =
+                service.pendingFor(student.getId());
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).invitationId().value())
+                .isEqualTo(pending.getId());
+        assertThat(result.get(0).tenantName())
+                .isEqualTo(institution.getName());
+        assertThat(result.get(0).role()).isEqualTo(MembershipRole.STUDENT);
+        assertThat(result.get(0).acceptUrl())
+                .isEqualTo(acceptUrlFor("raw-token"));
+    }
+
+    @Test
+    void pendingFor_noInvitations_isEmpty() {
+        when(userRepository.findById(student.getId()))
+                .thenReturn(Optional.of(student));
+        when(invitationRepository.findByEmailAndUsedAtIsNull(
+                "student@luminary.dev")).thenReturn(List.of());
+
+        assertThat(service.pendingFor(student.getId())).isEmpty();
+    }
+
+    @Test
+    void pendingFor_unknownUser_isForbidden() {
+        when(userRepository.findById(student.getId()))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.pendingFor(student.getId()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(e -> assertThat(((ApiException) e).getCode())
+                        .isEqualTo("user-not-found"));
+    }
+
     private String captureEmailedToken(TenantEntity tenant) {
         ArgumentCaptor<String> url = ArgumentCaptor.forClass(String.class);
         verify(invitationMailer).sendInvitation(
@@ -339,7 +414,12 @@ class InvitationServiceTest {
         return InvitationEntity.create(institution,
                 "student@luminary.dev", MembershipRole.STUDENT,
                 sha256("raw-token"),
-                OffsetDateTime.now().plusDays(7), admin.getId());
+                OffsetDateTime.now().plusDays(7),
+                acceptUrlFor("raw-token"), admin.getId());
+    }
+
+    private static String acceptUrlFor(String token) {
+        return "http://localhost:4200/invitations/accept?token=" + token;
     }
 
     private static String sha256(String value) {

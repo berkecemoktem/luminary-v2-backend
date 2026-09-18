@@ -47,7 +47,8 @@ public class MeController {
         List<WorkspaceView> workspaces = workspaceService.workspaces(userId);
         TenantId active = workspaceService.currentOrEmpty(userId).orElse(null);
         return new MeResponse(
-                new MeResponse.MeUser(user.getEmail(), user.getDisplayName()),
+                new MeResponse.MeUser(user.getEmail(), user.getDisplayName(),
+                        user.getCountry(), user.getCity()),
                 active, workspaces);
     }
 

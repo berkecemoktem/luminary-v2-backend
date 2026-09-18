@@ -29,6 +29,7 @@ import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -204,19 +205,46 @@ public class InvitationService {
         String token = randomToken();
         OffsetDateTime now = OffsetDateTime.now();
         OffsetDateTime expiresAt = now.plus(properties.getInvitationTtl());
+        String acceptUrl = properties.getInvitationAcceptUrlTemplate()
+                .replace("{token}", token);
 
         InvitationEntity invitation = invitationRepository.save(
                 InvitationEntity.create(tenant, email, role,
-                        sha256(token), expiresAt, actor.getUser().getId()));
-
-        String acceptUrl = properties.getInvitationAcceptUrlTemplate()
-                .replace("{token}", token);
+                        sha256(token), expiresAt, acceptUrl,
+                        actor.getUser().getId()));
 
         sendInvitationEmailAfterCommit(tenant, email, acceptUrl, expiresAt);
 
         return new InvitationCreated(
                 new InvitationId(invitation.getId()), new TenantId(tenant.getId()),
                 email, role, expiresAt);
+    }
+
+    /**
+     * Pending invitations for the signed-in user, matched by their verified
+     * email. Only un-used, not-yet-expired invitations that have a persisted
+     * accept link are surfaced to the in-app notification center.
+     */
+    @Transactional(readOnly = true)
+    public List<PendingInvitation> pendingFor(UUID actorUserId) {
+        UserEntity user = userRepository.findById(actorUserId)
+                .orElseThrow(() -> ApiException.forbidden("user-not-found",
+                        "Account not found."));
+        String email = normalizeEmail(user.getEmail());
+        if (email == null) {
+            return List.of();
+        }
+        OffsetDateTime now = OffsetDateTime.now();
+        return invitationRepository.findByEmailAndUsedAtIsNull(email)
+                .stream()
+                .filter(inv -> inv.getAcceptUrl() != null)
+                .filter(inv -> !inv.isExpired(now))
+                .map(inv -> new PendingInvitation(
+                        new InvitationId(inv.getId()),
+                        new TenantId(inv.getTenant().getId()),
+                        inv.getTenant().getName(), inv.getRole(),
+                        inv.getExpiresAt(), inv.getAcceptUrl()))
+                .toList();
     }
 
     /**

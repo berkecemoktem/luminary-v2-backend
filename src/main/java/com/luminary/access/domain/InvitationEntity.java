@@ -43,6 +43,9 @@ public class InvitationEntity {
     @Column(name = "expires_at", nullable = false, updatable = false)
     private OffsetDateTime expiresAt;
 
+    @Column(name = "accept_url", updatable = false)
+    private String acceptUrl;
+
     @Column(name = "used_at")
     private OffsetDateTime usedAt;
 
@@ -57,13 +60,15 @@ public class InvitationEntity {
 
     private InvitationEntity(UUID id, TenantEntity tenant, String email,
                              MembershipRole role, String tokenHash,
-                             OffsetDateTime expiresAt, UUID createdByUserId) {
+                             OffsetDateTime expiresAt, String acceptUrl,
+                             UUID createdByUserId) {
         this.id = id;
         this.tenant = tenant;
         this.email = email;
         this.role = role;
         this.tokenHash = tokenHash;
         this.expiresAt = expiresAt;
+        this.acceptUrl = acceptUrl;
         this.createdByUserId = createdByUserId;
         this.createdAt = OffsetDateTime.now();
     }
@@ -72,9 +77,10 @@ public class InvitationEntity {
                                           MembershipRole role,
                                           String tokenHash,
                                           OffsetDateTime expiresAt,
+                                          String acceptUrl,
                                           UUID createdByUserId) {
         return new InvitationEntity(UUID.randomUUID(), tenant, email, role,
-                tokenHash, expiresAt, createdByUserId);
+                tokenHash, expiresAt, acceptUrl, createdByUserId);
     }
 
     public UUID getId() {
@@ -99,6 +105,10 @@ public class InvitationEntity {
 
     public OffsetDateTime getExpiresAt() {
         return expiresAt;
+    }
+
+    public String getAcceptUrl() {
+        return acceptUrl;
     }
 
     public OffsetDateTime getUsedAt() {

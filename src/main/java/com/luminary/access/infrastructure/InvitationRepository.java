@@ -3,6 +3,7 @@ package com.luminary.access.infrastructure;
 import com.luminary.access.domain.InvitationEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -16,4 +17,6 @@ public interface InvitationRepository
 
     Optional<InvitationEntity> findFirstByTenantIdAndEmailOrderByCreatedAtDesc(
             String tenantId, String email);
+
+    List<InvitationEntity> findByEmailAndUsedAtIsNull(String email);
 }

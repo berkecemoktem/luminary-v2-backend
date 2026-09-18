@@ -34,6 +34,12 @@ public class UserEntity {
     @Column(name = "display_name", nullable = false)
     private String displayName;
 
+    @Column(name = "country")
+    private String country;
+
+    @Column(name = "city")
+    private String city;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
     private AccountStatus status;
@@ -79,6 +85,22 @@ public class UserEntity {
 
     public String getDisplayName() {
         return displayName;
+    }
+
+    public String getCountry() {
+        return country;
+    }
+
+    public void setCountry(String country) {
+        this.country = country;
+    }
+
+    public String getCity() {
+        return city;
+    }
+
+    public void setCity(String city) {
+        this.city = city;
     }
 
     public AccountStatus getStatus() {
