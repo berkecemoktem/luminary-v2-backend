@@ -9,6 +9,9 @@ import com.luminary.access.infrastructure.UserRepository;
 import com.luminary.shared.error.ApiException;
 import com.luminary.shared.identity.TenantId;
 import com.luminary.shared.identity.UserId;
+import com.luminary.shared.query.PageResponse;
+import com.luminary.shared.query.SearchRequest;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -18,7 +21,8 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * Identity and workspace endpoints ({@code GET /me}, {@code GET /me/workspaces},
+ * Identity and workspace endpoints ({@code GET /me},
+ * {@code POST /me/workspaces},
  * {@code POST /me/active-workspace}). The active workspace always comes from
  * the server session, never from the request.
  */
@@ -51,9 +55,11 @@ public class MeController {
                 active, workspaces);
     }
 
-    @GetMapping("/workspaces")
-    public List<WorkspaceView> workspaces() {
-        return workspaceService.workspaces(currentUser.require());
+    @PostMapping("/workspaces")
+    public PageResponse<WorkspaceView> searchWorkspaces(
+            @Valid @RequestBody SearchRequest request) {
+        return workspaceService.searchWorkspaces(
+                currentUser.require(), request);
     }
 
     @PostMapping("/active-workspace")

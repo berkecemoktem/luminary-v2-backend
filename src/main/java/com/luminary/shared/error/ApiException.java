@@ -3,7 +3,6 @@ package com.luminary.shared.error;
 import org.springframework.http.HttpStatus;
 
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -34,6 +33,11 @@ public final class ApiException extends RuntimeException {
 
     public Map<String, String> getFields() {
         return fields;
+    }
+
+    public static ApiException of(HttpStatus status, String code,
+                                  String detail) {
+        return new ApiException(status, code, detail, Map.of());
     }
 
     public static ApiException unauthorized(String code, String detail) {
@@ -67,9 +71,5 @@ public final class ApiException extends RuntimeException {
 
     public static ApiException internal(String code, String detail) {
         return new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, code, detail, Map.of());
-    }
-
-    LinkedHashMap<String, Object> asProblemProperties() {
-        return new LinkedHashMap<>(fields);
     }
 }

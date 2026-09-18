@@ -1,6 +1,7 @@
 package com.luminary.access.api.security;
 
 import com.luminary.access.application.LoginService;
+import com.luminary.shared.error.ApiProblemWriter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -23,7 +24,6 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -47,7 +47,8 @@ public class SecurityConfiguration {
     SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             LoginService loginService,
-            AppSecurityProperties props) throws Exception {
+            AppSecurityProperties props,
+            ApiProblemWriter problemWriter) throws Exception {
 
         OidcLoginSuccessHandler successHandler =
                 new OidcLoginSuccessHandler(loginService,
@@ -72,8 +73,10 @@ public class SecurityConfiguration {
                         .anyRequest().authenticated())
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(
-                                new ApiAwareAuthenticationEntryPoint())
-                        .accessDeniedHandler(apiAccessDeniedHandler()))
+                                new ApiAwareAuthenticationEntryPoint(
+                                        problemWriter))
+                        .accessDeniedHandler(
+                                apiAccessDeniedHandler(problemWriter)))
                 .oauth2Login(login -> login.successHandler(successHandler))
                 .logout(logout -> logout
                         .logoutUrl("/api/v1/auth/logout")
@@ -138,19 +141,13 @@ public class SecurityConfiguration {
     }
 
     @Bean
-    AccessDeniedHandler apiAccessDeniedHandler() {
+    AccessDeniedHandler apiAccessDeniedHandler(
+            ApiProblemWriter problemWriter) {
         return (request, response, accessDeniedException) -> {
             if (request.getRequestURI().startsWith("/api/")) {
-                response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-                response.setContentType(
-                        "application/problem+json;charset=UTF-8");
-                response.setCharacterEncoding("UTF-8");
-                String body = """
-                        {"type":"about:blank","title":"Forbidden",\
-                        "status":403,"code":"access-denied",\
-                        "instance":"%s"}"""
-                        .formatted(request.getRequestURI());
-                response.getWriter().write(body);
+                problemWriter.write(request, response, HttpStatus.FORBIDDEN,
+                        "access-denied",
+                        "Not authorized for this operation.");
             } else {
                 response.sendError(HttpServletResponse.SC_FORBIDDEN);
             }

@@ -2,21 +2,60 @@ package com.luminary.access.application;
 
 import com.luminary.access.application.port.CurrentSession;
 import com.luminary.access.domain.MembershipEntity;
+import com.luminary.access.domain.MembershipRole;
 import com.luminary.access.domain.MembershipStatus;
 import com.luminary.access.domain.TenantStatus;
+import com.luminary.access.domain.TenantType;
 import com.luminary.access.infrastructure.MembershipRepository;
 import com.luminary.shared.error.ApiException;
 import com.luminary.shared.identity.TenantId;
 import com.luminary.shared.identity.UserId;
+import com.luminary.shared.query.FilterOperator;
+import com.luminary.shared.query.PageResponse;
+import com.luminary.shared.query.SearchRequest;
+import com.luminary.shared.query.SortDirection;
+import com.luminary.shared.query.jpa.JpaQueryBuilder;
+import com.luminary.shared.query.jpa.QuerySchema;
+import org.springframework.data.domain.Page;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 @Service
 public class WorkspaceService {
+
+    private static final QuerySchema<MembershipEntity> WORKSPACE_QUERY =
+            QuerySchema.<MembershipEntity>builder()
+                    .field("tenantId", "tenant.id", String.class, false,
+                            FilterOperator.EQUALS, FilterOperator.IN)
+                    .field("name", "tenant.name", String.class, true,
+                            FilterOperator.EQUALS,
+                            FilterOperator.CONTAINS,
+                            FilterOperator.STARTS_WITH)
+                    .field("type", "tenant.type", TenantType.class, true,
+                            FilterOperator.EQUALS,
+                            FilterOperator.NOT_EQUALS,
+                            FilterOperator.IN)
+                    .field("role", "role", MembershipRole.class, true,
+                            FilterOperator.EQUALS,
+                            FilterOperator.NOT_EQUALS,
+                            FilterOperator.IN)
+                    .field("joinedAt", "joinedAt", OffsetDateTime.class,
+                            true,
+                            FilterOperator.EQUALS,
+                            FilterOperator.GREATER_THAN,
+                            FilterOperator.GREATER_THAN_OR_EQUAL,
+                            FilterOperator.LESS_THAN,
+                            FilterOperator.LESS_THAN_OR_EQUAL,
+                            FilterOperator.BETWEEN)
+                    .defaultSort("name", SortDirection.ASC)
+                    .stableSort("id")
+                    .build();
 
     private final MembershipRepository membershipRepository;
     private final CurrentSession currentSession;
@@ -38,6 +77,22 @@ public class WorkspaceService {
                         && m.getTenant().getStatus() == TenantStatus.ACTIVE)
                 .map(WorkspaceView::from)
                 .toList();
+    }
+
+    /**
+     * Paginated workspace query. Authorization constraints are applied by the
+     * service and cannot be overridden by client filters.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<WorkspaceView> searchWorkspaces(
+            UserId userId, SearchRequest request) {
+        Specification<MembershipEntity> clientFilters =
+                JpaQueryBuilder.specification(request, WORKSPACE_QUERY);
+        Page<WorkspaceView> page = membershipRepository.findAll(
+                        accessibleWorkspaces(userId).and(clientFilters),
+                        JpaQueryBuilder.pageable(request, WORKSPACE_QUERY))
+                .map(WorkspaceView::from);
+        return PageResponse.from(page);
     }
 
     /**
@@ -112,5 +167,14 @@ public class WorkspaceService {
                 .filter(m -> m.getStatus() == MembershipStatus.ACTIVE
                         && m.getTenant().getStatus() == TenantStatus.ACTIVE)
                 .isPresent();
+    }
+
+    private static Specification<MembershipEntity> accessibleWorkspaces(
+            UserId userId) {
+        return (root, query, builder) -> builder.and(
+                builder.equal(root.get("user").get("id"), userId.value()),
+                builder.equal(root.get("status"), MembershipStatus.ACTIVE),
+                builder.equal(root.get("tenant").get("status"),
+                        TenantStatus.ACTIVE));
     }
 }
