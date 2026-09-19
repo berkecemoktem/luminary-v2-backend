@@ -13,6 +13,7 @@ import com.luminary.access.infrastructure.InvitationRepository;
 import com.luminary.access.infrastructure.MembershipRepository;
 import com.luminary.access.infrastructure.UserRepository;
 import com.luminary.shared.error.ApiException;
+import com.luminary.shared.identity.InvitationId;
 import com.luminary.shared.identity.TenantId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,6 +47,7 @@ class InvitationServiceTest {
     private CurrentSession currentSession;
     private AccessAppProperties properties;
     private InvitationMailer invitationMailer;
+    private SchoolNotificationService schoolNotificationService;
     private InvitationService service;
 
     private UserEntity admin;
@@ -60,10 +62,11 @@ class InvitationServiceTest {
         userRepository = mock(UserRepository.class);
         currentSession = mock(CurrentSession.class);
         invitationMailer = mock(InvitationMailer.class);
+        schoolNotificationService = mock(SchoolNotificationService.class);
         properties = new AccessAppProperties();
         service = new InvitationService(invitationRepository,
                 membershipRepository, userRepository, currentSession,
-                properties, invitationMailer);
+                properties, invitationMailer, schoolNotificationService);
 
         admin = UserEntity.create(
                 new AuthIdentity("iss", "sub-admin"),
@@ -82,7 +85,7 @@ class InvitationServiceTest {
                 institution.getId(), admin.getId()))
                 .thenReturn(Optional.of(adminMembership));
         when(invitationRepository
-                .findByTenantIdAndEmailAndUsedAtIsNull(
+                .findByTenantIdAndEmailAndUsedAtIsNullAndRejectedAtIsNull(
                         institution.getId(), "newuser@luminary.dev"))
                 .thenReturn(Optional.empty());
         when(invitationRepository.save(any(InvitationEntity.class)))
@@ -333,7 +336,7 @@ class InvitationServiceTest {
                 institution.getId(), admin.getId()))
                 .thenReturn(Optional.of(adminMembership));
         when(invitationRepository
-                .findByTenantIdAndEmailAndUsedAtIsNull(
+                .findByTenantIdAndEmailAndUsedAtIsNullAndRejectedAtIsNull(
                         institution.getId(), "newuser@luminary.dev"))
                 .thenReturn(Optional.empty());
         ArgumentCaptor<InvitationEntity> saved =
@@ -363,7 +366,7 @@ class InvitationServiceTest {
                 admin.getId());
         when(userRepository.findById(student.getId()))
                 .thenReturn(Optional.of(student));
-        when(invitationRepository.findByEmailAndUsedAtIsNull(
+        when(invitationRepository.findByEmailAndUsedAtIsNullAndRejectedAtIsNull(
                 "student@luminary.dev"))
                 .thenReturn(List.of(pending, expired, withoutLink));
 
@@ -384,7 +387,7 @@ class InvitationServiceTest {
     void pendingFor_noInvitations_isEmpty() {
         when(userRepository.findById(student.getId()))
                 .thenReturn(Optional.of(student));
-        when(invitationRepository.findByEmailAndUsedAtIsNull(
+        when(invitationRepository.findByEmailAndUsedAtIsNullAndRejectedAtIsNull(
                 "student@luminary.dev")).thenReturn(List.of());
 
         assertThat(service.pendingFor(student.getId())).isEmpty();
@@ -399,6 +402,208 @@ class InvitationServiceTest {
                 .isInstanceOf(ApiException.class)
                 .satisfies(e -> assertThat(((ApiException) e).getCode())
                         .isEqualTo("user-not-found"));
+    }
+
+    @Test
+    void reject_marksInvitationRejected() {
+        InvitationEntity invitation = pendingInvitation();
+        when(userRepository.findById(student.getId()))
+                .thenReturn(Optional.of(student));
+        when(invitationRepository.findById(invitation.getId()))
+                .thenReturn(Optional.of(invitation));
+
+        service.reject(student.getId(),
+                new InvitationId(invitation.getId()));
+
+        assertThat(invitation.isRejected()).isTrue();
+        verify(invitationRepository).save(invitation);
+    }
+
+    @Test
+    void reject_wrongAccount_isRejected() {
+        InvitationEntity invitation = pendingInvitation();
+        UserEntity other = UserEntity.create(
+                new AuthIdentity("iss", "sub-other"),
+                "someone-else@luminary.dev", "Other");
+        when(userRepository.findById(other.getId()))
+                .thenReturn(Optional.of(other));
+        when(invitationRepository.findById(invitation.getId()))
+                .thenReturn(Optional.of(invitation));
+
+        assertThatThrownBy(() -> service.reject(other.getId(),
+                new InvitationId(invitation.getId())))
+                .isInstanceOf(ApiException.class)
+                .satisfies(e -> assertThat(
+                        ((ApiException) e).getCode())
+                        .isEqualTo("invitation-account-mismatch"));
+
+        assertThat(invitation.isRejected()).isFalse();
+    }
+
+    @Test
+    void reject_usedInvitation_isRejected() {
+        InvitationEntity invitation = pendingInvitation();
+        invitation.markUsed(OffsetDateTime.now().minusMinutes(1));
+        when(userRepository.findById(student.getId()))
+                .thenReturn(Optional.of(student));
+        when(invitationRepository.findById(invitation.getId()))
+                .thenReturn(Optional.of(invitation));
+
+        assertThatThrownBy(() -> service.reject(student.getId(),
+                new InvitationId(invitation.getId())))
+                .isInstanceOf(ApiException.class)
+                .satisfies(e -> assertThat(
+                        ((ApiException) e).getCode())
+                        .isEqualTo("invitation-already-used"));
+    }
+
+    @Test
+    void reject_alreadyRejectedInvitation_isRejected() {
+        InvitationEntity invitation = pendingInvitation();
+        invitation.markRejected(OffsetDateTime.now().minusMinutes(1));
+        when(userRepository.findById(student.getId()))
+                .thenReturn(Optional.of(student));
+        when(invitationRepository.findById(invitation.getId()))
+                .thenReturn(Optional.of(invitation));
+
+        assertThatThrownBy(() -> service.reject(student.getId(),
+                new InvitationId(invitation.getId())))
+                .isInstanceOf(ApiException.class)
+                .satisfies(e -> assertThat(
+                        ((ApiException) e).getCode())
+                        .isEqualTo("invitation-already-rejected"));
+    }
+
+    @Test
+    void reject_expiredInvitation_isRejected() {
+        InvitationEntity invitation = InvitationEntity.create(institution,
+                "student@luminary.dev", MembershipRole.STUDENT,
+                sha256("expired"), OffsetDateTime.now().minusMinutes(1),
+                acceptUrlFor("expired"), admin.getId());
+        when(userRepository.findById(student.getId()))
+                .thenReturn(Optional.of(student));
+        when(invitationRepository.findById(invitation.getId()))
+                .thenReturn(Optional.of(invitation));
+
+        assertThatThrownBy(() -> service.reject(student.getId(),
+                new InvitationId(invitation.getId())))
+                .isInstanceOf(ApiException.class)
+                .satisfies(e -> assertThat(
+                        ((ApiException) e).getCode())
+                        .isEqualTo("invitation-expired"));
+    }
+
+    @Test
+    void reject_unknownInvitation_isNotFound() {
+        when(userRepository.findById(student.getId()))
+                .thenReturn(Optional.of(student));
+        when(invitationRepository.findById(any(UUID.class)))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.reject(student.getId(),
+                new InvitationId(UUID.randomUUID())))
+                .isInstanceOf(ApiException.class)
+                .satisfies(e -> assertThat(
+                        ((ApiException) e).getCode())
+                        .isEqualTo("invitation-not-found"));
+    }
+
+    @Test
+    void accept_invalidatesOtherPendingInvitations() {
+        InvitationEntity invitation = pendingInvitation();
+        InvitationEntity otherSchool = InvitationEntity.create(
+                TenantEntity.institution("Other School", "UTC"),
+                "student@luminary.dev", MembershipRole.STUDENT,
+                sha256("other-token"), OffsetDateTime.now().plusDays(7),
+                acceptUrlFor("other-token"), admin.getId());
+        when(invitationRepository.findByTokenHash(sha256("raw-token")))
+                .thenReturn(Optional.of(invitation));
+        when(userRepository.findById(student.getId()))
+                .thenReturn(Optional.of(student));
+        when(membershipRepository.existsByTenantIdAndUserId(
+                institution.getId(), student.getId())).thenReturn(false);
+        when(membershipRepository.findByUserIdAndStatus(student.getId(),
+                MembershipStatus.ACTIVE)).thenReturn(List.of());
+        when(membershipRepository.save(any(MembershipEntity.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        when(invitationRepository
+                .findByEmailAndUsedAtIsNullAndRejectedAtIsNull(
+                        "student@luminary.dev"))
+                .thenReturn(List.of(invitation, otherSchool));
+
+        service.accept(student.getId(), "raw-token");
+
+        assertThat(invitation.isUsed()).isTrue();
+        assertThat(otherSchool.isRejected()).isTrue();
+        verify(invitationRepository).saveAll(
+                List.of(otherSchool));
+    }
+
+    @Test
+    void accept_recordsAcceptedSchoolNotification() {
+        InvitationEntity invitation = pendingInvitation();
+        when(invitationRepository.findByTokenHash(sha256("raw-token")))
+                .thenReturn(Optional.of(invitation));
+        when(userRepository.findById(student.getId()))
+                .thenReturn(Optional.of(student));
+        when(membershipRepository.existsByTenantIdAndUserId(
+                institution.getId(), student.getId())).thenReturn(false);
+        when(membershipRepository.findByUserIdAndStatus(student.getId(),
+                MembershipStatus.ACTIVE)).thenReturn(List.of());
+        when(membershipRepository.save(any(MembershipEntity.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        service.accept(student.getId(), "raw-token");
+
+        verify(schoolNotificationService).recordAccepted(
+                institution, student.getId(),
+                "student@luminary.dev", "Student", invitation.getId());
+    }
+
+    @Test
+    void reject_recordsRejectedSchoolNotification() {
+        InvitationEntity invitation = pendingInvitation();
+        when(userRepository.findById(student.getId()))
+                .thenReturn(Optional.of(student));
+        when(invitationRepository.findById(invitation.getId()))
+                .thenReturn(Optional.of(invitation));
+
+        service.reject(student.getId(),
+                new InvitationId(invitation.getId()));
+
+        verify(schoolNotificationService).recordRejected(
+                institution, student.getId(),
+                "student@luminary.dev", "Student", invitation.getId());
+    }
+
+    @Test
+    void create_ignoresRejectedInvitations() {
+        InvitationEntity rejected = InvitationEntity.create(institution,
+                "student@luminary.dev", MembershipRole.STUDENT,
+                sha256("rejected"), OffsetDateTime.now().plusDays(1),
+                acceptUrlFor("rejected"), admin.getId());
+        rejected.markRejected(OffsetDateTime.now().minusMinutes(1));
+        when(membershipRepository.findByTenantIdAndUserId(
+                institution.getId(), admin.getId()))
+                .thenReturn(Optional.of(adminMembership));
+        when(invitationRepository
+                .findByTenantIdAndEmailAndUsedAtIsNullAndRejectedAtIsNull(
+                        institution.getId(), "student@luminary.dev"))
+                .thenReturn(Optional.empty());
+        when(invitationRepository
+                .findByTenantIdAndEmailAndUsedAtIsNull(
+                        institution.getId(), "student@luminary.dev"))
+                .thenReturn(Optional.of(rejected));
+        when(invitationRepository.save(any(InvitationEntity.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        InvitationCreated result = service.create(admin.getId(),
+                new TenantId(institution.getId()), "student@luminary.dev",
+                null);
+
+        assertThat(result.email()).isEqualTo("student@luminary.dev");
+        verify(invitationMailer).sendInvitation(any(), anyString(),
+                anyString(), any());
     }
 
     private String captureEmailedToken(TenantEntity tenant) {

@@ -49,6 +49,9 @@ public class InvitationEntity {
     @Column(name = "used_at")
     private OffsetDateTime usedAt;
 
+    @Column(name = "rejected_at")
+    private OffsetDateTime rejectedAt;
+
     @Column(name = "created_by_user_id", updatable = false)
     private UUID createdByUserId;
 
@@ -115,8 +118,16 @@ public class InvitationEntity {
         return usedAt;
     }
 
+    public OffsetDateTime getRejectedAt() {
+        return rejectedAt;
+    }
+
     public boolean isUsed() {
         return usedAt != null;
+    }
+
+    public boolean isRejected() {
+        return rejectedAt != null;
     }
 
     public boolean isExpired(OffsetDateTime now) {
@@ -125,5 +136,9 @@ public class InvitationEntity {
 
     public void markUsed(OffsetDateTime now) {
         this.usedAt = now;
+    }
+
+    public void markRejected(OffsetDateTime now) {
+        this.rejectedAt = now;
     }
 }

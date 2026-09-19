@@ -57,6 +57,7 @@ public class InvitationService {
     private final CurrentSession currentSession;
     private final AccessAppProperties properties;
     private final InvitationMailer invitationMailer;
+    private final SchoolNotificationService schoolNotificationService;
 
     public InvitationService(
             InvitationRepository invitationRepository,
@@ -64,13 +65,15 @@ public class InvitationService {
             UserRepository userRepository,
             CurrentSession currentSession,
             AccessAppProperties properties,
-            InvitationMailer invitationMailer) {
+            InvitationMailer invitationMailer,
+            SchoolNotificationService schoolNotificationService) {
         this.invitationRepository = invitationRepository;
         this.membershipRepository = membershipRepository;
         this.userRepository = userRepository;
         this.currentSession = currentSession;
         this.properties = properties;
         this.invitationMailer = invitationMailer;
+        this.schoolNotificationService = schoolNotificationService;
     }
 
     @Transactional
@@ -91,7 +94,8 @@ public class InvitationService {
                 role == null ? MembershipRole.STUDENT : role;
 
         invitationRepository
-                .findByTenantIdAndEmailAndUsedAtIsNull(tenant.getId(), email)
+                .findByTenantIdAndEmailAndUsedAtIsNullAndRejectedAtIsNull(
+                        tenant.getId(), email)
                 .ifPresent(existing -> {
                     throw ApiException.conflict("invitation-already-pending",
                             "An active invitation already exists for this "
@@ -104,7 +108,8 @@ public class InvitationService {
     /**
      * Re-sends an invitation. Because only the hash of the previous token is
      * stored (the raw secret was delivered by email and is not retrievable),
-     * a resend always retires the previous link and issues a fresh token.
+     * a resend always retires the previous unresolved link and issues a fresh
+     * token. A previously rejected invitation stays rejected.
      */
     @Transactional
     public InvitationCreated resend(UUID actorUserId, TenantId tenantId,
@@ -130,8 +135,10 @@ public class InvitationService {
                     "This invitation has already been accepted.");
         }
         OffsetDateTime now = OffsetDateTime.now();
-        existing.markUsed(now);
-        invitationRepository.save(existing);
+        if (!existing.isRejected()) {
+            existing.markUsed(now);
+            invitationRepository.save(existing);
+        }
 
         return createInvitationAndEmail(actor, email,
                 existing.getRole());
@@ -189,6 +196,11 @@ public class InvitationService {
                         invitation.getRole()));
         invitation.markUsed(now);
         invitationRepository.save(invitation);
+        rejectOtherPendingInstitutions(accountEmail, invitation.getId(), now);
+
+        schoolNotificationService.recordAccepted(tenant,
+                actorUserId, user.getEmail(), user.getDisplayName(),
+                invitation.getId());
 
         TenantId joinedTenant = new TenantId(tenant.getId());
         currentSession.authenticate(new UserId(actorUserId), joinedTenant);
@@ -197,6 +209,73 @@ public class InvitationService {
                 joinedTenant, tenant.getName(),
                 tenant.getType(), invitation.getRole(),
                 membership.getJoinedAt());
+    }
+
+    /**
+     * A user can hold at most one institution workspace, so accepting one
+     * invitation invalidates every other still-open invitation on the same
+     * email. Only unused, unrejected, not-yet-expired invitations are closed;
+     * already-expired ones simply fall out of the pending list on their own.
+     */
+    private void rejectOtherPendingInstitutions(String email, UUID acceptedId,
+                                                OffsetDateTime now) {
+        List<InvitationEntity> otherPending = invitationRepository
+                .findByEmailAndUsedAtIsNullAndRejectedAtIsNull(email)
+                .stream()
+                .filter(inv -> !inv.getId().equals(acceptedId))
+                .filter(inv -> !inv.isExpired(now))
+                .toList();
+        for (InvitationEntity inv : otherPending) {
+            inv.markRejected(now);
+        }
+        if (!otherPending.isEmpty()) {
+            invitationRepository.saveAll(otherPending);
+        }
+    }
+
+    /**
+     * Declines a still-open invitation addressed to the signed-in user. The
+     * invitation is removed from the pending surface and can be re-issued by
+     * the inviting institution with a fresh link.
+     */
+    @Transactional
+    public void reject(UUID actorUserId, InvitationId invitationId) {
+        InvitationEntity invitation = invitationRepository
+                .findById(invitationId.value())
+                .orElseThrow(() -> ApiException.notFound(
+                        "invitation-not-found",
+                        "This invitation does not exist."));
+
+        UserEntity user = userRepository.findById(actorUserId)
+                .orElseThrow(() -> ApiException.forbidden("user-not-found",
+                        "Account not found."));
+        String accountEmail = normalizeEmail(user.getEmail());
+        if (accountEmail == null
+                || !invitation.getEmail().equals(accountEmail)) {
+            throw ApiException.forbidden("invitation-account-mismatch",
+                    "This invitation is for a different email address.");
+        }
+
+        OffsetDateTime now = OffsetDateTime.now();
+        if (invitation.isUsed()) {
+            throw ApiException.conflict("invitation-already-used",
+                    "This invitation has already been accepted.");
+        }
+        if (invitation.isRejected()) {
+            throw ApiException.conflict("invitation-already-rejected",
+                    "This invitation has already been rejected.");
+        }
+        if (invitation.isExpired(now)) {
+            throw ApiException.conflict("invitation-expired",
+                    "This invitation has expired.");
+        }
+
+        invitation.markRejected(now);
+        invitationRepository.save(invitation);
+
+        schoolNotificationService.recordRejected(invitation.getTenant(),
+                actorUserId, user.getEmail(), user.getDisplayName(),
+                invitation.getId());
     }
 
     private InvitationCreated createInvitationAndEmail(
@@ -235,7 +314,8 @@ public class InvitationService {
             return List.of();
         }
         OffsetDateTime now = OffsetDateTime.now();
-        return invitationRepository.findByEmailAndUsedAtIsNull(email)
+        return invitationRepository
+                .findByEmailAndUsedAtIsNullAndRejectedAtIsNull(email)
                 .stream()
                 .filter(inv -> inv.getAcceptUrl() != null)
                 .filter(inv -> !inv.isExpired(now))

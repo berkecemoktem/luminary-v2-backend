@@ -15,8 +15,14 @@ public interface InvitationRepository
     Optional<InvitationEntity> findByTenantIdAndEmailAndUsedAtIsNull(
             String tenantId, String email);
 
+    Optional<InvitationEntity> findByTenantIdAndEmailAndUsedAtIsNullAndRejectedAtIsNull(
+            String tenantId, String email);
+
     Optional<InvitationEntity> findFirstByTenantIdAndEmailOrderByCreatedAtDesc(
             String tenantId, String email);
 
     List<InvitationEntity> findByEmailAndUsedAtIsNull(String email);
+
+    List<InvitationEntity> findByEmailAndUsedAtIsNullAndRejectedAtIsNull(
+            String email);
 }

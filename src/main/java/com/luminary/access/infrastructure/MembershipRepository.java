@@ -1,6 +1,7 @@
 package com.luminary.access.infrastructure;
 
 import com.luminary.access.domain.MembershipEntity;
+import com.luminary.access.domain.MembershipRole;
 import com.luminary.access.domain.MembershipStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -12,6 +13,9 @@ public interface MembershipRepository
         extends JpaRepository<MembershipEntity, UUID> {
 
     List<MembershipEntity> findByUserId(UUID userId);
+
+    List<MembershipEntity> findByTenantIdAndRoleAndStatus(
+            String tenantId, MembershipRole role, MembershipStatus status);
 
     Optional<MembershipEntity> findByTenantIdAndUserId(String tenantId,
                                                        UUID userId);
